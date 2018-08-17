@@ -17,16 +17,6 @@ use std::sync::mpsc::*;
 mod piece;
 use crate::piece::*;
 
-const CANVAS_MAIN_STYLE: &str = "
-    border: solid #FFF;
-    padding-left: 0;
-    padding-right: 0;
-    margin-top: 5em;
-    margin-left: auto;
-    margin-right: auto;
-    display: block;
-";
-
 const CELL_SIZE: u32 = 30;
 const COLS: u32 = 10;
 const ROWS: u32 = 24;
@@ -210,17 +200,8 @@ fn update(state: &mut State, event: Event) {
 fn main() {
     stdweb::initialize();
 
-    let canvas_main: CanvasElement = document().create_element("canvas").unwrap().try_into().unwrap();
+    let canvas_main: CanvasElement = document().get_element_by_id("main").unwrap().try_into().unwrap();
     canvas_main.set_width(WIDTH); canvas_main.set_height(HEIGHT);
-    canvas_main.set_attribute("style", CANVAS_MAIN_STYLE).unwrap();
-    document().body().unwrap().append_child(&canvas_main);
-
-    /*let canvas_aux: CanvasElement = document().create_element("canvas").unwrap().try_into().unwrap();
-    canvas_aux.set_width(40); canvas_aux.set_width(100);
-    canvas_aux.set_attribute("style", CANVAS_AUX_STYLE).unwrap();
-    document().body().unwrap().append_child(&canvas_aux);*/
-
-    document().body().unwrap().set_attribute("style", "background-color: #000;").unwrap();
 
     let mut ctx_main: CanvasRenderingContext2d = canvas_main.get_context().unwrap();
 
