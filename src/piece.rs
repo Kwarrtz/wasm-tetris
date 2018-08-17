@@ -7,7 +7,7 @@ pub enum Genus { I, J, L, O, S, Z, T }
 
 #[derive(Clone,Copy)]
 pub enum Orientation { R0, R90, R180, R270 }
-pub use Orientation::*;
+crate use self::Orientation::*;
 
 #[derive(Clone,Copy)]
 pub struct Shape {
@@ -17,7 +17,7 @@ pub struct Shape {
 
 impl Shape {
     pub fn pieces(&self) -> Vec<(i32,i32)> {
-        use Genus::*;
+        use self::Genus::*;
         match self.genus {
             J => vec![(0,0),(0,-2),(0,-1),(-1,0)],
             L => vec![(0,0),(0,-2),(0,-1),(1,0)],
@@ -65,7 +65,7 @@ impl Distribution<Shape> for Standard {
 
 impl Distribution<Genus> for Standard {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Genus {
-        use Genus::*;
+        use self::Genus::*;
         match rng.gen_range(0, GENUS_NUM) {
             0 => I, 1 => J, 2 => L, 3 => O, 4 => S, 5 => Z, _ => T
         }

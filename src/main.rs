@@ -1,24 +1,23 @@
 #![feature(rust_2018_preview)]
 #![feature(vec_remove_item,nll)]
+#![warn(rust_2018_idioms)]
 
-#[macro_use]
-extern crate stdweb;
 use std::cmp::{max,min};
+use stdweb::{js,_js_impl,__js_raw_asm};
 use stdweb::traits::IKeyboardEvent;
 use stdweb::web::*;
 use stdweb::web::event::KeyUpEvent;
 use stdweb::web::html_element::CanvasElement;
 use stdweb::unstable::TryInto;
 
-extern crate rand;
 use rand::*;
 
 use std::sync::mpsc::*;
 
 mod piece;
-use piece::*;
+use crate::piece::*;
 
-const CANVAS_STYLE: &str = "
+const CANVAS_MAIN_STYLE: &str = "
     border: solid #FFF;
     padding-left: 0;
     padding-right: 0;
@@ -42,19 +41,16 @@ struct Piece {
 }
 
 impl Piece {
-    fn new<R: Rng + ?Sized>(rng: &mut R) -> Piece {
-        let shape = rng.gen::<Shape>();
-
-        let mut extents = (0,0,0);
+    fn new(shape: Shape, rng: &mut impl Rng) -> Piece {
+        let (mut l, mut b, mut r) = (0,0,0);
         for s in shape.pieces() {
-            extents.0 = min(extents.0, s.0);
-            extents.1 = max(extents.1, s.1);
-            extents.2 = max(extents.2, s.0 + 1);
+            l = min(l, s.0);
+            b = max(b, s.1);
+            r = max(r, s.0 + 1);
         }
 
         Piece {
-            center: ( rng.gen_range(-extents.0 as u32, COLS - extents.2 as u32)
-                    , HIDDEN - 1 - extents.1 as u32),
+            center: ( rng.gen_range(-l as u32, COLS - r as u32), HIDDEN - 1 - b as u32),
             shape: shape,
         }
     }
@@ -73,20 +69,22 @@ enum State {
     Game {
         board: Vec<(u32,u32)>,
         active: Piece,
+        next: Shape,
         score: u32,
         rng: ThreadRng,
         playing: bool,
     }
 }
 
-use State::*;
+use self::State::*;
 
 impl State {
     fn new_game() -> Self {
         let mut rng = thread_rng();
         Game {
             board: vec![],
-            active: Piece::new(&mut rng),
+            active: Piece::new(rng.gen(), &mut rng),
+            next: rng.gen(),
             score: 0,
             rng: rng,
             playing: true,
@@ -96,9 +94,9 @@ impl State {
 
 #[derive(PartialEq)]
 enum Event { Key(String), Tick }
-use Event::*;
+use self::Event::*;
 
-fn render(state: &State, ctx: &mut CanvasRenderingContext2d) {
+fn render_main(state: &State, ctx: &mut CanvasRenderingContext2d) {
     ctx.set_fill_style_color("#000");
     ctx.fill_rect(0.0, 0.0, (COLS * CELL_SIZE) as f64, (ROWS * CELL_SIZE) as f64);
     ctx.set_fill_style_color("#FFF");
@@ -124,7 +122,7 @@ fn render(state: &State, ctx: &mut CanvasRenderingContext2d) {
 
 fn update(state: &mut State, event: Event) {
     match state {
-        Game { board, active, rng, score, playing: playing @ true } => {
+        Game { board, active, rng, score, next, playing: playing @ true } => {
             match event {
                 Tick => {
                     active.center.1 += 1;
@@ -179,7 +177,8 @@ fn update(state: &mut State, event: Event) {
                 |&(x,y)| board.contains(&(x, y+1)) || y >= ROWS - 1
             ) {
                 board.append(&mut active.squares());
-                *active = Piece::new(rng);
+                *active = Piece::new(*next, rng);
+                *next = rng.gen();
                 for row in 0..ROWS {
                     if (0..COLS).all(|col| board.contains(&(col,row))) {
                         (0..COLS).for_each(|col| { board.remove_item(&(col,row)); });
@@ -211,14 +210,19 @@ fn update(state: &mut State, event: Event) {
 fn main() {
     stdweb::initialize();
 
-    let canvas: CanvasElement = document().create_element("canvas").unwrap().try_into().unwrap();
-    canvas.set_width(COLS * CELL_SIZE); canvas.set_height((ROWS - HIDDEN) * CELL_SIZE);
-    canvas.set_attribute("style", CANVAS_STYLE).unwrap();
-    document().body().unwrap().append_child(&canvas);
+    let canvas_main: CanvasElement = document().create_element("canvas").unwrap().try_into().unwrap();
+    canvas_main.set_width(WIDTH); canvas_main.set_height(HEIGHT);
+    canvas_main.set_attribute("style", CANVAS_MAIN_STYLE).unwrap();
+    document().body().unwrap().append_child(&canvas_main);
+
+    /*let canvas_aux: CanvasElement = document().create_element("canvas").unwrap().try_into().unwrap();
+    canvas_aux.set_width(40); canvas_aux.set_width(100);
+    canvas_aux.set_attribute("style", CANVAS_AUX_STYLE).unwrap();
+    document().body().unwrap().append_child(&canvas_aux);*/
 
     document().body().unwrap().set_attribute("style", "background-color: #000;").unwrap();
 
-    let mut ctx: CanvasRenderingContext2d = canvas.get_context().unwrap();
+    let mut ctx_main: CanvasRenderingContext2d = canvas_main.get_context().unwrap();
 
     let mut state = State::new_game();
 
@@ -237,7 +241,7 @@ fn main() {
         var callback = @{move || {
             if let Ok(event) = r.try_recv() {
                 update(&mut state, event);
-                render(&state, &mut ctx);
+                render_main(&state, &mut ctx_main);
             };
         }};
 
