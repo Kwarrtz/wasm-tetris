@@ -227,6 +227,21 @@ fn update(state: &mut State, event: Event) {
     }
 }
 
+fn intercept_key(e: &KeyUpEvent) -> bool {
+    if e.code() == "KeyM" {
+        js! {
+            var audio = document.getElementById("soundtrack");
+            if (audio.paused) {
+                audio.play();
+            } else {
+                audio.pause();
+            }
+        }
+        return true;
+    }
+    false
+}
+
 fn main() {
     stdweb::initialize();
 
@@ -242,7 +257,10 @@ fn main() {
     let s2 = s1.clone();
 
     window().add_event_listener(move |e: KeyUpEvent| {
-        s1.send(Key(e.code())).expect("Could not send keypress event");
+        let intercepted = intercept_key(&e);
+        if !intercepted {
+            s1.send(Key(e.code())).expect("Could not send keypress event");
+        }
     });
 
     js! { setInterval(@{move || {
