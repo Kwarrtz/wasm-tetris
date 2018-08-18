@@ -1,7 +1,6 @@
 use rand::distributions::{Standard,Distribution};
 use rand::Rng;
 
-const GENUS_NUM: usize = 7;
 #[derive(Clone,Copy)]
 pub enum Genus { I, J, L, O, S, Z, T }
 
@@ -66,7 +65,7 @@ impl Distribution<Shape> for Standard {
 impl Distribution<Genus> for Standard {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Genus {
         use self::Genus::*;
-        match rng.gen_range(0, GENUS_NUM) {
+        match rng.gen_range(0, 7) {
             0 => I, 1 => J, 2 => L, 3 => O, 4 => S, 5 => Z, _ => T
         }
     }

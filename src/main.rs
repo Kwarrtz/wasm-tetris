@@ -21,8 +21,9 @@ const CELL_SIZE: u32 = 30;
 const COLS: u32 = 10;
 const ROWS: u32 = 24;
 const HIDDEN: u32 = 4;
-const WIDTH: u32 = COLS * CELL_SIZE;
-const HEIGHT: u32 = (ROWS - HIDDEN) * CELL_SIZE;
+const WIDTH: u32 = 300;
+const HEIGHT: u32 = 600;
+const WIDTH_AUX: u32 = 140;
 
 #[derive(Clone)]
 struct Piece {
@@ -88,7 +89,7 @@ use self::Event::*;
 
 fn render_main(state: &State, ctx: &mut CanvasRenderingContext2d) {
     ctx.set_fill_style_color("#000");
-    ctx.fill_rect(0.0, 0.0, (COLS * CELL_SIZE) as f64, (ROWS * CELL_SIZE) as f64);
+    ctx.fill_rect(0.0, 0.0, WIDTH.into(), HEIGHT.into());
     ctx.set_fill_style_color("#FFF");
 
     match state {
@@ -106,6 +107,35 @@ fn render_main(state: &State, ctx: &mut CanvasRenderingContext2d) {
             ctx.set_font("30pt Arial");
             ctx.set_text_align(TextAlign::Center);
             ctx.fill_text("GAME OVER", WIDTH as f64 / 2.0, HEIGHT as f64 / 2.0, None);
+        }
+    }
+}
+
+fn render_aux(state: &State, ctx: &mut CanvasRenderingContext2d) {
+    ctx.set_fill_style_color("#000");
+    ctx.fill_rect(0.0, 0.0, WIDTH.into(), HEIGHT.into());
+    ctx.set_fill_style_color("#FFF");
+
+    if let Game { next, score, .. } = state {
+        ctx.set_font("35px Arial");
+        ctx.set_text_align(TextAlign::Center);
+        ctx.set_text_baseline(TextBaseline::Top);
+        ctx.fill_text(&format!("Score: {}", score), WIDTH_AUX as f64 / 2.0, 10.0, None);
+
+        let mut mins = (0,0);
+        for (x,y) in next.pieces() {
+            mins.0 = min(x,mins.0);
+            mins.1 = min(y,mins.1);
+        }
+
+        let correction = if mins.1 - mins.0 <= 2 { 1 } else { 0 };
+
+        for s in next.pieces() {
+            ctx.fill_rect(
+                10.0 + ((s.0 - mins.0 + correction) * CELL_SIZE as i32) as f64,
+                80.0 + ((s.1 - mins.1) * CELL_SIZE as i32) as f64,
+                CELL_SIZE as f64, CELL_SIZE as f64
+            )
         }
     }
 }
@@ -138,7 +168,7 @@ fn update(state: &mut State, event: Event) {
                     let mut rotated = active.clone();
                     rotated.shape.rotate();
                     if !rotated.squares().iter().any(
-                        |s| board.contains(s) || s.0 <= 0 || s.0 >= COLS - 1
+                        |s| board.contains(s) || s.0 > COLS - 1
                     ) {
                         *active = rotated;
                     }
@@ -201,9 +231,10 @@ fn main() {
     stdweb::initialize();
 
     let canvas_main: CanvasElement = document().get_element_by_id("main").unwrap().try_into().unwrap();
-    canvas_main.set_width(WIDTH); canvas_main.set_height(HEIGHT);
+    let canvas_aux: CanvasElement = document().get_element_by_id("aux").unwrap().try_into().unwrap();
 
     let mut ctx_main: CanvasRenderingContext2d = canvas_main.get_context().unwrap();
+    let mut ctx_aux: CanvasRenderingContext2d = canvas_aux.get_context().unwrap();
 
     let mut state = State::new_game();
 
@@ -223,6 +254,7 @@ fn main() {
             if let Ok(event) = r.try_recv() {
                 update(&mut state, event);
                 render_main(&state, &mut ctx_main);
+                render_aux(&state, &mut ctx_aux);
             };
         }};
 
