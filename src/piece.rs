@@ -1,5 +1,6 @@
 use rand::distributions::{Standard,Distribution};
 use rand::Rng;
+use std::cmp::{min,max};
 
 #[derive(Clone,Copy)]
 pub enum Genus { I, J, L, O, S, Z, T }
@@ -42,6 +43,18 @@ impl Shape {
             R180 => R270,
             R270 => R0
         };
+    }
+
+    pub fn bounds(&self) -> (i32,i32,i32,i32) {
+        let (mut t, mut l, mut b, mut r) = (0,0,0,0);
+        for s in self.pieces() {
+            t = min(t, s.1);
+            l = min(l, s.0);
+            b = max(b, s.1 + 1);
+            r = max(r, s.0 + 1);
+        }
+
+        (t,l,b,r)
     }
 }
 

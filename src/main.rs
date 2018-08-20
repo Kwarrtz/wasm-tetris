@@ -1,7 +1,6 @@
 #![feature(vec_remove_item)]
 #![warn(rust_2018_idioms)]
 
-use std::cmp::{max,min};
 use stdweb::{js,_js_impl,__js_raw_asm};
 use stdweb::traits::IKeyboardEvent;
 use stdweb::web::*;
@@ -23,7 +22,9 @@ const HIDDEN: u32 = 4;
 const WIDTH: u32 = 300;
 const HEIGHT: u32 = 600;
 const WIDTH_AUX: u32 = 140;
-const INIT_INTERVAL: u32 = 500;
+const INIT_INTERVAL: u32 = 750;
+const MIN_INTERVAL: u32 = 150;
+const INTERVAL_INCR: u32 = 100;
 
 #[derive(Clone)]
 struct Piece {
@@ -33,15 +34,10 @@ struct Piece {
 
 impl Piece {
     fn new(shape: Shape, rng: &mut impl Rng) -> Piece {
-        let (mut l, mut b, mut r) = (0,0,0);
-        for s in shape.pieces() {
-            l = min(l, s.0);
-            b = max(b, s.1);
-            r = max(r, s.0 + 1);
-        }
+        let (_,l,b,r) = shape.bounds();
 
         Piece {
-            center: ( rng.gen_range(-l as u32, COLS - r as u32), HIDDEN - 1 - b as u32),
+            center: ( rng.gen_range(-l as u32, COLS - r as u32), HIDDEN - b as u32),
             shape: shape,
         }
     }
@@ -124,18 +120,14 @@ fn render_aux(state: &State, ctx: &mut CanvasRenderingContext2d) {
         ctx.set_text_baseline(TextBaseline::Top);
         ctx.fill_text(&format!("Score: {}", score), WIDTH_AUX as f64 / 2.0, 10.0, None);
 
-        let mut mins = (0,0);
-        for (x,y) in next.pieces() {
-            mins.0 = min(x,mins.0);
-            mins.1 = min(y,mins.1);
-        }
+        let (t,l,_,r) = next.bounds();
 
-        let correction = if mins.1 - mins.0 <= 2 { 1 } else { 0 };
+        let correction = if r - l <= 2 { 1 } else { 0 };
 
         for s in next.pieces() {
             ctx.fill_rect(
-                10.0 + ((s.0 - mins.0 + correction) * CELL_SIZE as i32) as f64,
-                80.0 + ((s.1 - mins.1) * CELL_SIZE as i32) as f64,
+                10.0 + ((s.0 - l + correction) * CELL_SIZE as i32) as f64,
+                80.0 + ((s.1 - t) * CELL_SIZE as i32) as f64,
                 CELL_SIZE as f64, CELL_SIZE as f64
             )
         }
@@ -152,6 +144,8 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
                 audio.pause();
             }
         }
+
+        return
     }
 
     match state {
@@ -164,7 +158,7 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
                     js! { setTimeout(@{tick}, @{*interval}); }
                 }
 
-                Key(ref c) if c == "ArrowLeft" => {
+                Key(ref c) if c == "ArrowLeft" || c == "KeyA" => {
                     if !active.squares().iter().any(
                         |s| board.contains(&(s.0-1,s.1)) || s.0 <= 0
                     ) {
@@ -172,7 +166,7 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
                     }
                 }
 
-                Key(ref c) if c == "ArrowRight" => {
+                Key(ref c) if c == "ArrowRight" || c == "KeyD" => {
                     if !active.squares().iter().any(
                         |s| board.contains(&(s.0+1,s.1)) || s.0 >= COLS - 1
                     ) {
@@ -180,7 +174,7 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
                     }
                 }
 
-                Key(ref c) if c == "ArrowUp" => {
+                Key(ref c) if c == "ArrowUp" || c == "KeyW" => {
                     let mut rotated = active.clone();
                     rotated.shape.rotate();
                     if !rotated.squares().iter().any(
@@ -190,7 +184,7 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
                     }
                 }
 
-                Key(ref c) if c == "ArrowDown" => {
+                Key(ref c) if c == "ArrowDown" || c == "KeyS" => {
                     active.center.1 += 1;
                 }
 
@@ -215,13 +209,20 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
                 board.append(&mut active.squares());
                 *active = Piece::new(*next, rng);
                 *next = rng.gen();
+
                 for row in 0..ROWS {
                     if (0..COLS).all(|col| board.contains(&(col,row))) {
                         (0..COLS).for_each(|col| { board.remove_item(&(col,row)); });
                         for s in board.iter_mut() { if s.1 < row { s.1 += 1; } }
+
                         *score += 1;
+
+                        if *interval > MIN_INTERVAL {
+                            *interval -= INTERVAL_INCR;
+                        }
                     }
                 }
+
             }
 
             if board.iter().any(|&(_,y)| y <= HIDDEN) {
