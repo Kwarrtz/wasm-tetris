@@ -1,5 +1,4 @@
-#![feature(rust_2018_preview)]
-#![feature(vec_remove_item,nll)]
+#![feature(vec_remove_item)]
 #![warn(rust_2018_idioms)]
 
 use std::cmp::{max,min};
@@ -24,6 +23,7 @@ const HIDDEN: u32 = 4;
 const WIDTH: u32 = 300;
 const HEIGHT: u32 = 600;
 const WIDTH_AUX: u32 = 140;
+const INIT_INTERVAL: u32 = 500;
 
 #[derive(Clone)]
 struct Piece {
@@ -64,6 +64,7 @@ enum State {
         score: u32,
         rng: ThreadRng,
         playing: bool,
+        interval: u32,
     }
 }
 
@@ -79,6 +80,7 @@ impl State {
             score: 0,
             rng: rng,
             playing: true,
+            interval: INIT_INTERVAL,
         }
     }
 }
@@ -140,12 +142,26 @@ fn render_aux(state: &State, ctx: &mut CanvasRenderingContext2d) {
     }
 }
 
-fn update(state: &mut State, event: Event) {
+fn update(state: &mut State, event: &Event, s: Sender<Event>) {
+    if *event == Key("KeyM".to_string()) {
+        js! {
+            var audio = document.getElementById("soundtrack");
+            if (audio.paused) {
+                audio.play();
+            } else {
+                audio.pause();
+            }
+        }
+    }
+
     match state {
-        Game { board, active, rng, score, next, playing: playing @ true } => {
+        Game { board, active, rng, score, next, interval, playing: playing @ true } => {
             match event {
                 Tick => {
                     active.center.1 += 1;
+
+                    let tick = move || { s.send(Tick).expect("Could not send tick event"); };
+                    js! { setTimeout(@{tick}, @{*interval}); }
                 }
 
                 Key(ref c) if c == "ArrowLeft" => {
@@ -214,32 +230,17 @@ fn update(state: &mut State, event: Event) {
         }
 
         Game { playing: playing @ false, .. } => {
-            if event == Key("KeyP".into()) {
+            if *event == Key("KeyP".into()) {
                 *playing = true;
             }
         }
 
         GameOver(_) => {
-            if event == Key("Space".into()) {
+            if *event == Key("Space".into()) {
                 *state = State::new_game();
             }
         }
     }
-}
-
-fn intercept_key(e: &KeyUpEvent) -> bool {
-    if e.code() == "KeyM" {
-        js! {
-            var audio = document.getElementById("soundtrack");
-            if (audio.paused) {
-                audio.play();
-            } else {
-                audio.pause();
-            }
-        }
-        return true;
-    }
-    false
 }
 
 fn main() {
@@ -256,21 +257,16 @@ fn main() {
     let (s1,r) = channel();
     let s2 = s1.clone();
 
-    window().add_event_listener(move |e: KeyUpEvent| {
-        let intercepted = intercept_key(&e);
-        if !intercepted {
-            s1.send(Key(e.code())).expect("Could not send keypress event");
-        }
-    });
+    s1.send(Tick).expect("Could not send tick event");
 
-    js! { setInterval(@{move || {
-        s2.send(Tick).expect("Could not send tick event");
-    } }, 500); }
+    window().add_event_listener(move |e: KeyUpEvent| {
+        s1.send(Key(e.code())).expect("Could not send keypress event");
+    });
 
     js! {
         var callback = @{move || {
             if let Ok(event) = r.try_recv() {
-                update(&mut state, event);
+                update(&mut state, &event, s2.clone());
                 render_main(&state, &mut ctx_main);
                 render_aux(&state, &mut ctx_aux);
             };
