@@ -61,14 +61,16 @@ enum State {
         rng: ThreadRng,
         playing: bool,
         interval: u32,
+        next_tick_id: u32,
     }
 }
 
 use self::State::*;
 
 impl State {
-    fn new_game() -> Self {
+    fn new_game(s: Sender<Event>) -> Self {
         let mut rng = thread_rng();
+        let id = schedule_tick(s, INIT_INTERVAL);
         Game {
             board: vec![],
             active: Piece::new(rng.gen(), &mut rng),
@@ -77,6 +79,7 @@ impl State {
             rng: rng,
             playing: true,
             interval: INIT_INTERVAL,
+            next_tick_id: id,
         }
     }
 }
@@ -101,10 +104,16 @@ fn render_main(state: &State, ctx: &mut CanvasRenderingContext2d) {
             }
         }
 
-        GameOver(_score) => {
-            ctx.set_font("30pt Arial");
+        GameOver(score) => {
             ctx.set_text_align(TextAlign::Center);
-            ctx.fill_text("GAME OVER", WIDTH as f64 / 2.0, HEIGHT as f64 / 2.0, None);
+            ctx.set_font("30pt Arial");
+            ctx.set_text_baseline(TextBaseline::Bottom);
+            ctx.fill_text("GAME OVER",
+                WIDTH as f64 / 2.0, HEIGHT as f64 / 2.0, None);
+            ctx.set_font("20pt Arial");
+            ctx.set_text_baseline(TextBaseline::Top);
+            ctx.fill_text(&format!("Final Score: {}", score),
+                WIDTH as f64 / 2.0, HEIGHT as f64 / 2.0 + 20.0, None);
         }
     }
 }
@@ -114,27 +123,31 @@ fn render_aux(state: &State, ctx: &mut CanvasRenderingContext2d) {
     ctx.fill_rect(0.0, 0.0, WIDTH.into(), HEIGHT.into());
     ctx.set_fill_style_color("#FFF");
 
-    if let Game { next, score, .. } = state {
-        ctx.set_font("35px Arial");
-        ctx.set_text_align(TextAlign::Center);
-        ctx.set_text_baseline(TextBaseline::Top);
-        ctx.fill_text(&format!("Score: {}", score), WIDTH_AUX as f64 / 2.0, 10.0, None);
+    match state {
+        Game { next, score, .. } => {
+            ctx.set_font("35px Arial");
+            ctx.set_text_align(TextAlign::Center);
+            ctx.set_text_baseline(TextBaseline::Top);
+            ctx.fill_text(&format!("Score: {}", score), WIDTH_AUX as f64 / 2.0, 10.0, None);
 
-        let (t,l,_,r) = next.bounds();
+            let (t,l,_,r) = next.bounds();
 
-        let correction = if r - l <= 2 { 1 } else { 0 };
+            let correction = if r - l <= 2 { 1 } else { 0 };
 
-        for s in next.pieces() {
-            ctx.fill_rect(
-                10.0 + ((s.0 - l + correction) * CELL_SIZE as i32) as f64,
-                80.0 + ((s.1 - t) * CELL_SIZE as i32) as f64,
-                CELL_SIZE as f64, CELL_SIZE as f64
-            )
-        }
+            for s in next.pieces() {
+                ctx.fill_rect(
+                    10.0 + ((s.0 - l + correction) * CELL_SIZE as i32) as f64,
+                    80.0 + ((s.1 - t) * CELL_SIZE as i32) as f64,
+                    CELL_SIZE as f64, CELL_SIZE as f64
+                )
+            }
+        },
+        _ => { }
     }
 }
 
 fn update(state: &mut State, event: &Event, s: Sender<Event>) {
+    // intercept 'M' key to pause/play music
     if *event == Key("KeyM".to_string()) {
         js! {
             var audio = document.getElementById("soundtrack");
@@ -149,13 +162,12 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
     }
 
     match state {
-        Game { board, active, rng, score, next, interval, playing: playing @ true } => {
+        Game { board, active, rng, score, next, interval, next_tick_id, playing: playing @ true } => {
             match event {
                 Tick => {
                     active.center.1 += 1;
 
-                    let tick = move || { s.send(Tick).expect("Could not send tick event"); };
-                    js! { setTimeout(@{tick}, @{*interval}); }
+                    *next_tick_id = schedule_tick(s, *interval)
                 }
 
                 Key(ref c) if c == "ArrowLeft" || c == "KeyA" => {
@@ -197,12 +209,14 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
                 }
 
                 Key(ref c) if c == "KeyP" => {
+                    // playing = true already matched, so pause
                     *playing = false;
                 }
 
                 _ => { },
             }
 
+            // active piece makes contact with floor
             if active.squares().iter().any(
                 |&(x,y)| board.contains(&(x, y+1)) || y >= ROWS - 1
             ) {
@@ -211,9 +225,10 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
                 *next = rng.gen();
 
                 for row in 0..ROWS {
+                    // row is complete
                     if (0..COLS).all(|col| board.contains(&(col,row))) {
-                        (0..COLS).for_each(|col| { board.remove_item(&(col,row)); });
-                        for s in board.iter_mut() { if s.1 < row { s.1 += 1; } }
+                        (0..COLS).for_each(|col| { board.remove_item(&(col,row)); }); // remove row
+                        for s in board.iter_mut() { if s.1 < row { s.1 += 1; } } // shift rows above
 
                         *score += 1;
 
@@ -226,6 +241,15 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
             }
 
             if board.iter().any(|&(_,y)| y <= HIDDEN) {
+                let new_highscore = match get_highscore_cookie() {
+                    Some(old_highscore) if *score < old_highscore => old_highscore,
+                    _ => *score
+                };
+
+                js! { document.cookie = "highscore=" + @{new_highscore}; }
+
+                js! { clearTimeout(@{*next_tick_id}); }
+
                 *state = GameOver(*score);
             }
         }
@@ -238,7 +262,7 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
 
         GameOver(_) => {
             if *event == Key("Space".into()) {
-                *state = State::new_game();
+                *state = State::new_game(s);
             }
         }
     }
@@ -253,21 +277,20 @@ fn main() {
     let mut ctx_main: CanvasRenderingContext2d = canvas_main.get_context().unwrap();
     let mut ctx_aux: CanvasRenderingContext2d = canvas_aux.get_context().unwrap();
 
-    let mut state = State::new_game();
+    let (s,r) = channel();
 
-    let (s1,r) = channel();
-    let s2 = s1.clone();
+    let mut state = State::new_game(s.clone());
 
-    s1.send(Tick).expect("Could not send tick event");
-
+    let s_key = s.clone();
     window().add_event_listener(move |e: KeyUpEvent| {
-        s1.send(Key(e.code())).expect("Could not send keypress event");
+        s_key.send(Key(e.code())).expect("Could not send keypress event");
     });
 
+    // continuously poll for new events on channel
     js! {
         var callback = @{move || {
             if let Ok(event) = r.try_recv() {
-                update(&mut state, &event, s2.clone());
+                update(&mut state, &event, s.clone());
                 render_main(&state, &mut ctx_main);
                 render_aux(&state, &mut ctx_aux);
             };
@@ -280,4 +303,17 @@ fn main() {
 
         requestAnimationFrame(loop);
     };
+}
+
+fn schedule_tick(s: Sender<Event>, interval: u32) -> u32 {
+    let tick = move || { s.send(Tick).expect("Could not send tick event"); };
+    let id: u32 = js! { return setTimeout(@{tick}, @{interval}); }.try_into().unwrap();
+    id
+}
+
+fn get_highscore_cookie() -> Option<u32> {
+    let cookie: String = js! { return document.cookie; }.try_into().unwrap();
+    let mut cookie_iter = cookie.split('=');
+    cookie_iter.next()?;
+    cookie_iter.next()?.parse().ok()
 }
