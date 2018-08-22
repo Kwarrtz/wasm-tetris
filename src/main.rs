@@ -1,6 +1,8 @@
 #![feature(vec_remove_item)]
 #![warn(rust_2018_idioms)]
 
+use std::cmp::max;
+
 use stdweb::{js,_js_impl,__js_raw_asm};
 use stdweb::traits::IKeyboardEvent;
 use stdweb::web::*;
@@ -21,7 +23,6 @@ const ROWS: u32 = 24;
 const HIDDEN: u32 = 4;
 const WIDTH: u32 = 300;
 const HEIGHT: u32 = 600;
-const WIDTH_AUX: u32 = 140;
 const INIT_INTERVAL: u32 = 750;
 const MIN_INTERVAL: u32 = 150;
 const INTERVAL_INCR: u32 = 100;
@@ -52,12 +53,16 @@ impl Piece {
 }
 
 enum State {
-    GameOver(u32),
+    GameOver {
+        score: u32,
+        beat_highscore: bool,
+    },
     Game {
         board: Vec<(u32,u32)>,
         active: Piece,
         next: Shape,
         score: u32,
+        highscore: Option<u32>,
         rng: ThreadRng,
         playing: bool,
         interval: u32,
@@ -76,6 +81,7 @@ impl State {
             active: Piece::new(rng.gen(), &mut rng),
             next: rng.gen(),
             score: 0,
+            highscore: get_highscore_cookie(),
             rng: rng,
             playing: true,
             interval: INIT_INTERVAL,
@@ -104,16 +110,24 @@ fn render_main(state: &State, ctx: &mut CanvasRenderingContext2d) {
             }
         }
 
-        GameOver(score) => {
+        GameOver { score, beat_highscore } => {
             ctx.set_text_align(TextAlign::Center);
             ctx.set_font("30pt Arial");
             ctx.set_text_baseline(TextBaseline::Bottom);
+
             ctx.fill_text("GAME OVER",
                 WIDTH as f64 / 2.0, HEIGHT as f64 / 2.0, None);
-            ctx.set_font("20pt Arial");
+
+            ctx.set_font("25px Arial");
             ctx.set_text_baseline(TextBaseline::Top);
+
             ctx.fill_text(&format!("Final Score: {}", score),
                 WIDTH as f64 / 2.0, HEIGHT as f64 / 2.0 + 20.0, None);
+
+            if *beat_highscore {
+                ctx.fill_text("NEW HIGHSCORE",
+                    WIDTH as f64 / 2.0, HEIGHT as f64 / 2.0 + 60.0, None);
+            }
         }
     }
 }
@@ -124,11 +138,11 @@ fn render_aux(state: &State, ctx: &mut CanvasRenderingContext2d) {
     ctx.set_fill_style_color("#FFF");
 
     match state {
-        Game { next, score, .. } => {
+        Game { next, score, highscore, .. } => {
             ctx.set_font("35px Arial");
-            ctx.set_text_align(TextAlign::Center);
+            ctx.set_text_align(TextAlign::Left);
             ctx.set_text_baseline(TextBaseline::Top);
-            ctx.fill_text(&format!("Score: {}", score), WIDTH_AUX as f64 / 2.0, 10.0, None);
+            ctx.fill_text("Up Next:", 0.0, 10.0, None);
 
             let (t,l,_,r) = next.bounds();
 
@@ -140,6 +154,14 @@ fn render_aux(state: &State, ctx: &mut CanvasRenderingContext2d) {
                     80.0 + ((s.1 - t) * CELL_SIZE as i32) as f64,
                     CELL_SIZE as f64, CELL_SIZE as f64
                 )
+            }
+
+            ctx.set_font("25px Arial");
+
+            ctx.fill_text(&format!("Score: {}", score), 0.0, 230.0, None);
+
+            if let Some(hs) = highscore {
+                ctx.fill_text(&format!("Highscore: {}", hs), 0.0, 265.0, None);
             }
         },
         _ => { }
@@ -162,7 +184,7 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
     }
 
     match state {
-        Game { board, active, rng, score, next, interval, next_tick_id, playing: playing @ true } => {
+        Game { board, active, rng, score, highscore, next, interval, next_tick_id, playing: playing @ true } => {
             match event {
                 Tick => {
                     active.center.1 += 1;
@@ -216,7 +238,7 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
                 _ => { },
             }
 
-            // active piece makes contact with floor
+            // if active piece makes contact with floor
             if active.squares().iter().any(
                 |&(x,y)| board.contains(&(x, y+1)) || y >= ROWS - 1
             ) {
@@ -225,42 +247,46 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
                 *next = rng.gen();
 
                 for row in 0..ROWS {
-                    // row is complete
+                    // if row is complete
                     if (0..COLS).all(|col| board.contains(&(col,row))) {
                         (0..COLS).for_each(|col| { board.remove_item(&(col,row)); }); // remove row
                         for s in board.iter_mut() { if s.1 < row { s.1 += 1; } } // shift rows above
 
                         *score += 1;
 
-                        if *interval > MIN_INTERVAL {
-                            *interval -= INTERVAL_INCR;
-                        }
+                        // speed up blocks (unless already at max speed)
+                        *interval = max(*interval - INTERVAL_INCR, MIN_INTERVAL);
                     }
                 }
 
             }
 
+            // if board is full (game over)
             if board.iter().any(|&(_,y)| y <= HIDDEN) {
-                let new_highscore = match get_highscore_cookie() {
-                    Some(old_highscore) if *score < old_highscore => old_highscore,
-                    _ => *score
+                let (beat, new_highscore) = match highscore {
+                    Some(old_highscore) if *score <= *old_highscore => (false, *old_highscore),
+                    _ => (true, *score)
                 };
 
                 js! { document.cookie = "highscore=" + @{new_highscore}; }
 
+                // clear in case user starts new game before pending tick goes through
+                // (results in blocks jumping twice in next game)
                 js! { clearTimeout(@{*next_tick_id}); }
 
-                *state = GameOver(*score);
+                *state = GameOver { score: *score, beat_highscore: beat };
             }
         }
 
         Game { playing: playing @ false, .. } => {
+            // resume
             if *event == Key("KeyP".into()) {
                 *playing = true;
             }
         }
 
-        GameOver(_) => {
+        GameOver { .. } => {
+            // new game
             if *event == Key("Space".into()) {
                 *state = State::new_game(s);
             }
@@ -307,12 +333,12 @@ fn main() {
 
 fn schedule_tick(s: Sender<Event>, interval: u32) -> u32 {
     let tick = move || { s.send(Tick).expect("Could not send tick event"); };
-    let id: u32 = js! { return setTimeout(@{tick}, @{interval}); }.try_into().unwrap();
+    let id: u32 = js!( return setTimeout(@{tick}, @{interval}); ).try_into().unwrap();
     id
 }
 
 fn get_highscore_cookie() -> Option<u32> {
-    let cookie: String = js! { return document.cookie; }.try_into().unwrap();
+    let cookie: String = js!( return document.cookie; ).try_into().unwrap();
     let mut cookie_iter = cookie.split('=');
     cookie_iter.next()?;
     cookie_iter.next()?.parse().ok()

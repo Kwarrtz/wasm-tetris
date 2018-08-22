@@ -7,5 +7,5 @@ authors = ["Dathan Ault-McCoy <dsam10@icloud.com>"]
 edition = "2018"
 
 [dependencies]
-stdweb = "0.4.7"
+stdweb = "0.4.8"
 rand = { version = "^0.5", features = ["stdweb"] }
