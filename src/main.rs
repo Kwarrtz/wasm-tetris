@@ -22,8 +22,8 @@ const HIDDEN: u32 = 4;
 const WIDTH: u32 = 300;
 const HEIGHT: u32 = 600;
 const INIT_INTERVAL: u32 = 750;
-const MIN_INTERVAL: u32 = 150;
-const INTERVAL_INCR: u32 = 100;
+const MIN_INTERVAL: u32 = 250;
+const INTERVAL_COEFF: f32 = 0.96;
 
 enum State {
     GameOver {
@@ -117,14 +117,15 @@ fn render_aux(state: &State, ctx: &mut CanvasRenderingContext2d) {
             ctx.set_text_baseline(TextBaseline::Top);
             ctx.fill_text("Up Next:", 0.0, 10.0, None);
 
-            let (t,l,_,r) = next.bounds();
+            let (t,l,b,r) = next.bounds();
 
-            let correction = if r - l <= 2 { 1 } else { 0 };
+            let corr_x = if r - l <= 2 { 1 } else { 0 };
+            let corr_y = if b - t <= 2 { 1 } else { 0 };
 
             for s in next.pieces() {
                 ctx.fill_rect(
-                    10.0 + ((s.0 - l + correction) * CELL_SIZE as i32) as f64,
-                    80.0 + ((s.1 - t) * CELL_SIZE as i32) as f64,
+                    10.0 + ((s.0 - l + corr_x) * CELL_SIZE as i32) as f64,
+                    80.0 + ((s.1 - t + corr_y) * CELL_SIZE as i32) as f64,
                     CELL_SIZE as f64, CELL_SIZE as f64
                 )
             }
@@ -228,7 +229,7 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
                         *score += 1;
 
                         // speed up blocks (unless already at max speed)
-                        *interval = max(*interval - INTERVAL_INCR, MIN_INTERVAL);
+                        *interval = max((*interval as f32 * INTERVAL_COEFF) as u32, MIN_INTERVAL);
                     }
                 }
 
