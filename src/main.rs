@@ -1,8 +1,6 @@
 #![feature(vec_remove_item)]
 #![warn(rust_2018_idioms)]
 
-use std::cmp::max;
-
 use stdweb::{js,_js_impl,__js_raw_asm};
 use stdweb::traits::IKeyboardEvent;
 use stdweb::web::*;
@@ -11,11 +9,11 @@ use stdweb::web::html_element::CanvasElement;
 use stdweb::unstable::TryInto;
 
 use rand::*;
+use rand::distributions::{Standard,Distribution};
 
 use std::sync::mpsc::*;
 
-mod piece;
-use crate::piece::*;
+use std::cmp::{min,max};
 
 const CELL_SIZE: u32 = 30;
 const COLS: u32 = 10;
@@ -26,31 +24,6 @@ const HEIGHT: u32 = 600;
 const INIT_INTERVAL: u32 = 750;
 const MIN_INTERVAL: u32 = 150;
 const INTERVAL_INCR: u32 = 100;
-
-#[derive(Clone)]
-struct Piece {
-    center: (u32,u32),
-    shape: Shape,
-}
-
-impl Piece {
-    fn new(shape: Shape, rng: &mut impl Rng) -> Piece {
-        let (_,l,b,r) = shape.bounds();
-
-        Piece {
-            center: ( rng.gen_range(-l as u32, COLS - r as u32), HIDDEN - b as u32),
-            shape: shape,
-        }
-    }
-
-    fn squares(&self) -> Vec<(u32,u32)> {
-        self.shape.pieces().iter().map(|s| {
-            let x = s.0 + self.center.0 as i32;
-            let y = s.1 + self.center.1 as i32;
-            (x as u32, y as u32)
-        }).collect()
-    }
-}
 
 enum State {
     GameOver {
@@ -342,4 +315,111 @@ fn get_highscore_cookie() -> Option<u32> {
     let mut cookie_iter = cookie.split('=');
     cookie_iter.next()?;
     cookie_iter.next()?.parse().ok()
+}
+
+#[derive(Clone)]
+struct Piece {
+    center: (u32,u32),
+    shape: Shape,
+}
+
+impl Piece {
+    fn new(shape: Shape, rng: &mut impl Rng) -> Piece {
+        let (_,l,b,r) = shape.bounds();
+
+        Piece {
+            center: ( rng.gen_range(-l as u32, COLS - r as u32), HIDDEN - b as u32),
+            shape: shape,
+        }
+    }
+
+    fn squares(&self) -> Vec<(u32,u32)> {
+        self.shape.pieces().iter().map(|s| {
+            let x = s.0 + self.center.0 as i32;
+            let y = s.1 + self.center.1 as i32;
+            (x as u32, y as u32)
+        }).collect()
+    }
+}
+
+#[derive(Clone,Copy)]
+enum Genus { I, J, L, O, S, Z, T }
+
+#[derive(Clone,Copy)]
+enum Orientation { R0, R90, R180, R270 }
+use self::Orientation::*;
+
+#[derive(Clone,Copy)]
+struct Shape {
+    genus: Genus,
+    orientation: Orientation,
+}
+
+impl Shape {
+    fn pieces(&self) -> Vec<(i32,i32)> {
+        use self::Genus::*;
+        match self.genus {
+            J => vec![(0,0),(0,-2),(0,-1),(-1,0)],
+            L => vec![(0,0),(0,-2),(0,-1),(1,0)],
+            T => vec![(0,0),(-1,0),(1,0),(0,1)],
+            S => vec![(0,0),(-1,0),(0,1),(1,1)],
+            Z => vec![(0,0),(1,0),(0,1),(-1,1)],
+            I => vec![(0,0),(0,-1),(0,1),(0,2)],
+            O => vec![(0,0),(1,0),(0,1),(1,1)]
+        }.iter().map(|&(x,y)| {
+            match self.orientation {
+                R0 => (x,y),
+                R90 => (-y,x),
+                R180 => (-x,-y),
+                R270 => (y,-x)
+            }
+        }).collect()
+    }
+
+    fn rotate(&mut self) {
+        self.orientation = match self.orientation {
+            R0 => R90,
+            R90 => R180,
+            R180 => R270,
+            R270 => R0
+        };
+    }
+
+    fn bounds(&self) -> (i32,i32,i32,i32) {
+        let (mut t, mut l, mut b, mut r) = (0,0,0,0);
+        for s in self.pieces() {
+            t = min(t, s.1);
+            l = min(l, s.0);
+            b = max(b, s.1 + 1);
+            r = max(r, s.0 + 1);
+        }
+
+        (t,l,b,r)
+    }
+}
+
+impl Distribution<Orientation> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Orientation {
+        match rng.gen_range(0,4) {
+            0 => R0, 1 => R90, 2 => R180, _ => R270
+        }
+    }
+}
+
+impl Distribution<Shape> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Shape {
+        Shape {
+            genus: rng.gen(),
+            orientation: rng.gen(),
+        }
+    }
+}
+
+impl Distribution<Genus> for Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Genus {
+        use self::Genus::*;
+        match rng.gen_range(0, 7) {
+            0 => I, 1 => J, 2 => L, 3 => O, 4 => S, 5 => Z, _ => T
+        }
+    }
 }
