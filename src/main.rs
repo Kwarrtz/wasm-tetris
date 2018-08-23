@@ -24,6 +24,7 @@ const HEIGHT: u32 = 600;
 const INIT_INTERVAL: u32 = 750;
 const MIN_INTERVAL: u32 = 250;
 const INTERVAL_COEFF: f32 = 0.96;
+const LIMBO_TIME: u32 = 500;
 
 enum State {
     GameOver {
@@ -40,6 +41,7 @@ enum State {
         playing: bool,
         interval: u32,
         next_tick_id: u32,
+        in_limbo: bool,
     }
 }
 
@@ -59,12 +61,13 @@ impl State {
             playing: true,
             interval: INIT_INTERVAL,
             next_tick_id: id,
+            in_limbo: false,
         }
     }
 }
 
-#[derive(PartialEq)]
-enum Event { Key(String), Tick }
+#[derive(PartialEq,Debug)]
+enum Event { Key(String), Tick, Glue }
 use self::Event::*;
 
 fn render_main(state: &State, ctx: &mut CanvasRenderingContext2d) {
@@ -143,6 +146,8 @@ fn render_aux(state: &State, ctx: &mut CanvasRenderingContext2d) {
 }
 
 fn update(state: &mut State, event: &Event, s: Sender<Event>) {
+    let s_limbo = s.clone();
+
     // intercept 'M' key to pause/play music
     if *event == Key("KeyM".to_string()) {
         js! {
@@ -158,7 +163,11 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
     }
 
     match state {
-        Game { board, active, rng, score, highscore, next, interval, next_tick_id, playing: playing @ true } => {
+        Game {
+            playing: playing @ true,
+            board, active, next, score, highscore, rng,
+            interval, next_tick_id, in_limbo,
+        } => {
             match event {
                 Tick => {
                     active.center.1 += 1;
@@ -193,7 +202,11 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
                 }
 
                 Key(ref c) if c == "ArrowDown" || c == "KeyS" => {
-                    active.center.1 += 1;
+                    if !active.squares().iter().any(
+                        |s| board.contains(&(s.0,s.1+1)) || s.1 >= ROWS - 1
+                    ) {
+                        active.center.1 += 1;
+                    }
                 }
 
                 Key(ref c) if c == "Space" => {
@@ -209,6 +222,28 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
                     *playing = false;
                 }
 
+                Glue => {
+                    board.append(&mut active.squares());
+                    *active = Piece::new(*next, rng);
+                    *next = rng.gen();
+
+                    for row in 0..ROWS {
+                        // if row is complete
+                        if (0..COLS).all(|col| board.contains(&(col,row))) {
+                            (0..COLS).for_each(|col| { board.remove_item(&(col,row)); }); // remove row
+                            for s in board.iter_mut() { if s.1 < row { s.1 += 1; } } // shift rows above
+
+                            *score += 1;
+
+                            // speed up blocks (unless already at max speed)
+                            *interval = max((*interval as f32 * INTERVAL_COEFF) as u32, MIN_INTERVAL);
+                        }
+                    }
+
+                    *in_limbo = false;
+                    *next_tick_id = schedule_tick(s, *interval);
+                }
+
                 _ => { },
             }
 
@@ -216,23 +251,18 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
             if active.squares().iter().any(
                 |&(x,y)| board.contains(&(x, y+1)) || y >= ROWS - 1
             ) {
-                board.append(&mut active.squares());
-                *active = Piece::new(*next, rng);
-                *next = rng.gen();
-
-                for row in 0..ROWS {
-                    // if row is complete
-                    if (0..COLS).all(|col| board.contains(&(col,row))) {
-                        (0..COLS).for_each(|col| { board.remove_item(&(col,row)); }); // remove row
-                        for s in board.iter_mut() { if s.1 < row { s.1 += 1; } } // shift rows above
-
-                        *score += 1;
-
-                        // speed up blocks (unless already at max speed)
-                        *interval = max((*interval as f32 * INTERVAL_COEFF) as u32, MIN_INTERVAL);
-                    }
+                // if piece was falling, puts it in limbo
+                // if piece was already in limbo, extends it
+                js! { clearTimeout(@{*next_tick_id}); }
+                *next_tick_id = schedule_glue(s_limbo, LIMBO_TIME);
+                *in_limbo = true;
+            } else {
+                // piece in limbo has moved off edge and is now falling again
+                if *in_limbo {
+                    // back to normal
+                    *in_limbo = false;
+                    *next_tick_id = schedule_tick(s_limbo, *interval);
                 }
-
             }
 
             // if board is full (game over)
@@ -308,6 +338,12 @@ fn main() {
 fn schedule_tick(s: Sender<Event>, interval: u32) -> u32 {
     let tick = move || { s.send(Tick).expect("Could not send tick event"); };
     let id: u32 = js!( return setTimeout(@{tick}, @{interval}); ).try_into().unwrap();
+    id
+}
+
+fn schedule_glue(s: Sender<Event>, interval: u32) -> u32 {
+    let glue = move || { s.send(Glue).expect("Could not send glue event"); };
+    let id: u32 = js!( return setTimeout(@{glue}, @{interval}); ).try_into().unwrap();
     id
 }
 
