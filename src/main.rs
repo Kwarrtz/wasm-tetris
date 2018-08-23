@@ -180,6 +180,8 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
             board, active, next, score, highscore, rng,
             interval, next_tick_id: id, in_limbo, held,
         } => {
+            let prev_active = active.clone();
+
             match event {
                 Tick => {
                     active.center.1 += 1;
@@ -275,10 +277,12 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
             if active.squares().iter().any(
                 |&(x,y)| board.contains(&(x, y+1)) || y >= ROWS - 1
             ) {
-                // if piece was falling, puts it in limbo
-                // if piece was already in limbo, extends it
-                schedule_glue(s_limbo, LIMBO_TIME, id);
-                *in_limbo = true;
+                if *active != prev_active || !*in_limbo {
+                    // if piece was falling, puts it in limbo
+                    // if piece was already in limbo, extends it
+                    schedule_glue(s_limbo, LIMBO_TIME, id);
+                    *in_limbo = true;
+                }
             } else {
                 // piece in limbo has moved off edge and is now falling again
                 if *in_limbo {
@@ -360,6 +364,7 @@ fn main() {
 
 fn schedule_tick(s: Sender<Event>, interval: u32, id: &mut u32) {
     let tick = move || { s.send(Tick).expect("Could not send tick event"); };
+    js! { clearTimeout(@{*id}); }
     *id = js!( return setTimeout(@{tick}, @{interval}); ).try_into().unwrap();
 }
 
@@ -376,7 +381,7 @@ fn get_highscore_cookie() -> Option<u32> {
     cookie_iter.next()?.parse().ok()
 }
 
-#[derive(Clone)]
+#[derive(Clone,PartialEq)]
 struct Piece {
     center: (u32,u32),
     shape: Shape,
@@ -401,14 +406,14 @@ impl Piece {
     }
 }
 
-#[derive(Clone,Copy)]
+#[derive(Clone,Copy,PartialEq)]
 enum Genus { I, J, L, O, S, Z, T }
 
-#[derive(Clone,Copy)]
+#[derive(Clone,Copy,PartialEq)]
 enum Orientation { R0, R90, R180, R270 }
 use self::Orientation::*;
 
-#[derive(Clone,Copy)]
+#[derive(Clone,Copy,PartialEq)]
 struct Shape {
     genus: Genus,
     orientation: Orientation,
