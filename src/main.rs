@@ -42,6 +42,7 @@ enum State {
         interval: u32,
         next_tick_id: u32,
         in_limbo: bool,
+        held: Option<Shape>,
     }
 }
 
@@ -50,7 +51,8 @@ use self::State::*;
 impl State {
     fn new_game(s: Sender<Event>) -> Self {
         let mut rng = thread_rng();
-        let id = schedule_tick(s, INIT_INTERVAL);
+        let mut id = 0;
+        schedule_tick(s, INIT_INTERVAL, &mut id);
         Game {
             board: vec![],
             active: Piece::new(rng.gen(), &mut rng),
@@ -62,6 +64,7 @@ impl State {
             interval: INIT_INTERVAL,
             next_tick_id: id,
             in_limbo: false,
+            held: None,
         }
     }
 }
@@ -108,30 +111,34 @@ fn render_main(state: &State, ctx: &mut CanvasRenderingContext2d) {
     }
 }
 
+fn draw_shape(shape: &Shape, x: f64, y: f64, ctx: &mut CanvasRenderingContext2d) {
+    let (t,l,b,r) = shape.bounds();
+
+    let corr_x = if r - l <= 2 { 1 } else { 0 };
+    let corr_y = if b - t <= 2 { 1 } else { 0 };
+
+    for s in shape.pieces() {
+        ctx.fill_rect(
+            x + ((s.0 - l + corr_x) * CELL_SIZE as i32) as f64,
+            y + ((s.1 - t + corr_y) * CELL_SIZE as i32) as f64,
+            CELL_SIZE as f64, CELL_SIZE as f64
+        )
+    }
+}
+
 fn render_aux(state: &State, ctx: &mut CanvasRenderingContext2d) {
     ctx.set_fill_style_color("#000");
     ctx.fill_rect(0.0, 0.0, WIDTH.into(), HEIGHT.into());
     ctx.set_fill_style_color("#FFF");
 
     match state {
-        Game { next, score, highscore, .. } => {
+        Game { next, score, highscore, held, .. } => {
             ctx.set_font("35px Arial");
             ctx.set_text_align(TextAlign::Left);
             ctx.set_text_baseline(TextBaseline::Top);
             ctx.fill_text("Up Next:", 0.0, 10.0, None);
 
-            let (t,l,b,r) = next.bounds();
-
-            let corr_x = if r - l <= 2 { 1 } else { 0 };
-            let corr_y = if b - t <= 2 { 1 } else { 0 };
-
-            for s in next.pieces() {
-                ctx.fill_rect(
-                    10.0 + ((s.0 - l + corr_x) * CELL_SIZE as i32) as f64,
-                    80.0 + ((s.1 - t + corr_y) * CELL_SIZE as i32) as f64,
-                    CELL_SIZE as f64, CELL_SIZE as f64
-                )
-            }
+            draw_shape(next, 10.0, 80.0, ctx);
 
             ctx.set_font("25px Arial");
 
@@ -139,6 +146,11 @@ fn render_aux(state: &State, ctx: &mut CanvasRenderingContext2d) {
 
             if let Some(hs) = highscore {
                 ctx.fill_text(&format!("Highscore: {}", hs), 0.0, 265.0, None);
+            }
+
+            if let Some(shape) = held {
+                ctx.fill_text("Held:", 0.0, 330.0, None);
+                draw_shape(shape, 10.0, 380.0, ctx);
             }
         },
         _ => { }
@@ -166,13 +178,13 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
         Game {
             playing: playing @ true,
             board, active, next, score, highscore, rng,
-            interval, next_tick_id, in_limbo,
+            interval, next_tick_id: id, in_limbo, held,
         } => {
             match event {
                 Tick => {
                     active.center.1 += 1;
 
-                    *next_tick_id = schedule_tick(s, *interval)
+                    schedule_tick(s, *interval, id)
                 }
 
                 Key(ref c) if c == "ArrowLeft" || c == "KeyA" => {
@@ -222,6 +234,18 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
                     *playing = false;
                 }
 
+                Key(ref c) if c == "KeyH" => {
+                    if let Some(shape) = held {
+                        *next = active.shape;
+                        *active = Piece::new(*shape,rng);
+                        *held = None;
+                    } else {
+                        *held = Some(active.shape);
+                        *active = Piece::new(*next, rng);
+                        *next = rng.gen();
+                    }
+                }
+
                 Glue => {
                     board.append(&mut active.squares());
                     *active = Piece::new(*next, rng);
@@ -241,7 +265,7 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
                     }
 
                     *in_limbo = false;
-                    *next_tick_id = schedule_tick(s, *interval);
+                    schedule_tick(s, *interval, id);
                 }
 
                 _ => { },
@@ -253,15 +277,14 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
             ) {
                 // if piece was falling, puts it in limbo
                 // if piece was already in limbo, extends it
-                js! { clearTimeout(@{*next_tick_id}); }
-                *next_tick_id = schedule_glue(s_limbo, LIMBO_TIME);
+                schedule_glue(s_limbo, LIMBO_TIME, id);
                 *in_limbo = true;
             } else {
                 // piece in limbo has moved off edge and is now falling again
                 if *in_limbo {
                     // back to normal
                     *in_limbo = false;
-                    *next_tick_id = schedule_tick(s_limbo, *interval);
+                    schedule_tick(s_limbo, *interval, id);
                 }
             }
 
@@ -276,7 +299,7 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
 
                 // clear in case user starts new game before pending tick goes through
                 // (results in blocks jumping twice in next game)
-                js! { clearTimeout(@{*next_tick_id}); }
+                js! { clearTimeout(@{*id}); }
 
                 *state = GameOver { score: *score, beat_highscore: beat };
             }
@@ -335,16 +358,15 @@ fn main() {
     };
 }
 
-fn schedule_tick(s: Sender<Event>, interval: u32) -> u32 {
+fn schedule_tick(s: Sender<Event>, interval: u32, id: &mut u32) {
     let tick = move || { s.send(Tick).expect("Could not send tick event"); };
-    let id: u32 = js!( return setTimeout(@{tick}, @{interval}); ).try_into().unwrap();
-    id
+    *id = js!( return setTimeout(@{tick}, @{interval}); ).try_into().unwrap();
 }
 
-fn schedule_glue(s: Sender<Event>, interval: u32) -> u32 {
+fn schedule_glue(s: Sender<Event>, interval: u32, id: &mut u32) {
     let glue = move || { s.send(Glue).expect("Could not send glue event"); };
-    let id: u32 = js!( return setTimeout(@{glue}, @{interval}); ).try_into().unwrap();
-    id
+    js! { clearTimeout(@{*id}); }
+    *id = js!( return setTimeout(@{glue}, @{interval}); ).try_into().unwrap();
 }
 
 fn get_highscore_cookie() -> Option<u32> {
