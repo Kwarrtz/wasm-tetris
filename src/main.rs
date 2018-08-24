@@ -1,5 +1,4 @@
 #![feature(vec_remove_item)]
-#![warn(rust_2018_idioms)]
 
 use stdweb::{js,_js_impl,__js_raw_asm};
 use stdweb::traits::IKeyboardEvent;
@@ -52,7 +51,7 @@ impl State {
     fn new_game(s: Sender<Event>) -> Self {
         let mut rng = thread_rng();
         let mut id = 0;
-        schedule_tick(s, INIT_INTERVAL, &mut id);
+        schedule_event(Tick, INIT_INTERVAL, s, &mut id);
         Game {
             board: vec![],
             active: Piece::new(rng.gen(), &mut rng),
@@ -69,9 +68,30 @@ impl State {
     }
 }
 
-#[derive(PartialEq,Debug)]
+#[derive(PartialEq,Debug,Clone)]
 enum Event { Key(String), Tick, Glue }
 use self::Event::*;
+
+fn schedule_event(event: Event, interval: u32, s: Sender<Event>, id: &mut u32) {
+    js! { clearTimeout(@{*id}); }
+    let trigger = move  || { s.send(event.clone()).expect("Could not send event"); };
+    *id = js!( return setTimeout(@{trigger}, @{interval}); ).try_into().unwrap();
+}
+
+fn get_highscore_cookie() -> Option<u32> {
+    let cookie: String = js!( return document.cookie; ).try_into().unwrap();
+    let mut cookie_iter = cookie.split('=');
+    cookie_iter.next()?;
+    cookie_iter.next()?.parse().ok()
+}
+
+fn modify_piece(piece: &mut Piece, action: impl FnOnce(&mut Piece), board: &Vec<(u32,u32)>) {
+    let mut new_piece = piece.clone();
+    action(&mut new_piece);
+    if !new_piece.squares().iter().any(|s| board.contains(s) || s.0 >= COLS || s.1 >= ROWS) {
+        *piece = new_piece;
+    }
+}
 
 fn render_main(state: &State, ctx: &mut CanvasRenderingContext2d) {
     ctx.set_fill_style_color("#000");
@@ -186,42 +206,20 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
                 Tick => {
                     active.center.1 += 1;
 
-                    schedule_tick(s, *interval, id)
+                    schedule_event(Tick, *interval, s, id)
                 }
 
-                Key(ref c) if c == "ArrowLeft" || c == "KeyA" => {
-                    if !active.squares().iter().any(
-                        |s| board.contains(&(s.0-1,s.1)) || s.0 <= 0
-                    ) {
-                        active.center.0 -= 1;
-                    }
-                }
+                Key(ref c) if c == "ArrowLeft" || c == "KeyA" =>
+                    modify_piece(active, |p| p.center.0 -= 1, board),
 
-                Key(ref c) if c == "ArrowRight" || c == "KeyD" => {
-                    if !active.squares().iter().any(
-                        |s| board.contains(&(s.0+1,s.1)) || s.0 >= COLS - 1
-                    ) {
-                        active.center.0 += 1;
-                    }
-                }
+                Key(ref c) if c == "ArrowRight" || c == "KeyD" =>
+                    modify_piece(active, |p| p.center.0 += 1, board),
 
-                Key(ref c) if c == "ArrowUp" || c == "KeyW" => {
-                    let mut rotated = active.clone();
-                    rotated.shape.rotate();
-                    if !rotated.squares().iter().any(
-                        |s| board.contains(s) || s.0 > COLS - 1
-                    ) {
-                        *active = rotated;
-                    }
-                }
+                Key(ref c) if c == "ArrowUp" || c == "KeyW" =>
+                    modify_piece(active, |p| p.shape.rotate(), board),
 
-                Key(ref c) if c == "ArrowDown" || c == "KeyS" => {
-                    if !active.squares().iter().any(
-                        |s| board.contains(&(s.0,s.1+1)) || s.1 >= ROWS - 1
-                    ) {
-                        active.center.1 += 1;
-                    }
-                }
+                Key(ref c) if c == "ArrowDown" || c == "KeyS" =>
+                    modify_piece(active, |p| p.center.1 += 1, board),
 
                 Key(ref c) if c == "Space" => {
                     while !active.squares().iter().any(
@@ -231,10 +229,7 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
                     }
                 }
 
-                Key(ref c) if c == "KeyP" => {
-                    // playing = true already matched, so pause
-                    *playing = false;
-                }
+                Key(ref c) if c == "KeyP" => *playing = false,
 
                 Key(ref c) if c == "KeyH" => {
                     if let Some(shape) = held {
@@ -267,7 +262,7 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
                     }
 
                     *in_limbo = false;
-                    schedule_tick(s, *interval, id);
+                    schedule_event(Tick, *interval, s, id);
                 }
 
                 _ => { },
@@ -280,7 +275,7 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
                 if *active != prev_active || !*in_limbo {
                     // if piece was falling, puts it in limbo
                     // if piece was already in limbo, extends it
-                    schedule_glue(s_limbo, LIMBO_TIME, id);
+                    schedule_event(Glue, LIMBO_TIME, s_limbo, id);
                     *in_limbo = true;
                 }
             } else {
@@ -288,7 +283,7 @@ fn update(state: &mut State, event: &Event, s: Sender<Event>) {
                 if *in_limbo {
                     // back to normal
                     *in_limbo = false;
-                    schedule_tick(s_limbo, *interval, id);
+                    schedule_event(Tick, *interval, s_limbo, id);
                 }
             }
 
@@ -360,25 +355,6 @@ fn main() {
 
         requestAnimationFrame(loop);
     };
-}
-
-fn schedule_tick(s: Sender<Event>, interval: u32, id: &mut u32) {
-    let tick = move || { s.send(Tick).expect("Could not send tick event"); };
-    js! { clearTimeout(@{*id}); }
-    *id = js!( return setTimeout(@{tick}, @{interval}); ).try_into().unwrap();
-}
-
-fn schedule_glue(s: Sender<Event>, interval: u32, id: &mut u32) {
-    let glue = move || { s.send(Glue).expect("Could not send glue event"); };
-    js! { clearTimeout(@{*id}); }
-    *id = js!( return setTimeout(@{glue}, @{interval}); ).try_into().unwrap();
-}
-
-fn get_highscore_cookie() -> Option<u32> {
-    let cookie: String = js!( return document.cookie; ).try_into().unwrap();
-    let mut cookie_iter = cookie.split('=');
-    cookie_iter.next()?;
-    cookie_iter.next()?.parse().ok()
 }
 
 #[derive(Clone,PartialEq)]
